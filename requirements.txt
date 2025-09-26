@@ -1,0 +1,6 @@
+streamlit
+Pillow
+roboflow
+matplotlib
+pandas
+requests
