@@ -6,6 +6,7 @@ from PIL import Image
 import io
 
 # --- Pre-flight System and Python Version Check ---
+# This part of the code checks if you completed Part 1 correctly.
 def system_check():
     """
     Checks if the system is running a compatible Python version.
@@ -15,16 +16,7 @@ def system_check():
         st.error(
             f"❌ Incompatible Python Version (v{sys.version_info.major}.{sys.version_info.minor}) Detected\n\n"
             "This application's dependencies (like PyTorch and OpenCV) are not yet compatible with Python 3.12+.\n\n"
-            "**Please create a new virtual environment with Python 3.10 or 3.11.**\n"
-            "Example commands:\n"
-            "```bash\n"
-            "# 1. Create the environment\n"
-            "python3.10 -m venv venv\n\n"
-            "# 2. Activate it\n"
-            "source venv/bin/activate\n\n"
-            "# 3. Re-install packages\n"
-            "pip install -r requirements.txt\n"
-            "```"
+            "**Please follow the instructions to create a new virtual environment with Python 3.10 or 3.11.**"
         )
         st.stop()  # Stop the Streamlit script execution
 
@@ -39,7 +31,6 @@ from roboflow import Roboflow
 MODEL_PATH = "best.pt"
 ROBOFLOW_API_KEY_ENV = "ROBOFLOW_API_KEY"
 
-# (The rest of the code is identical to the previous version)
 
 # --- Model Training Function ---
 def train_model():
@@ -107,11 +98,11 @@ def run_main_app():
         with col2:
             st.image(result_image_rgb, caption='Processed Image', use_column_width=True)
 
-        detected_objects = {model.names[int(c)]: 0 for r in results for c in r.boxes.cls}
+        detected_objects = {}
         for r in results:
             for c in r.boxes.cls:
                 class_name = model.names[int(c)]
-                detected_objects[class_name] += 1
+                detected_objects[class_name] = detected_objects.get(class_name, 0) + 1
         
         if detected_objects:
             st.write("### Detected Waste Types:")
