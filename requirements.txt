@@ -5,3 +5,5 @@ Pillow==10.3.0
 roboflow==1.1.28
 ultralytics==8.2.19
 requests==2.31.0
+zipfile
+shutil
