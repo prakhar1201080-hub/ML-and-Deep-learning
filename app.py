@@ -1,81 +1,140 @@
-import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
-from PIL import Image
-from roboflow import Roboflow
 import os
-import zipfile
 import shutil
-from collections import Counter
+import streamlit as st
+from ultralytics import YOLO
+from roboflow import Roboflow
+from PIL import Image
+import io
 
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="Computer Vision-based Waste Segregation System",
-    page_icon="♻️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- Constants ---
+MODEL_PATH = "best.pt"
+ROBOFLOW_API_KEY_ENV = "ROBOFLOW_API_KEY"
 
-# --- Caching Roboflow Model ---
-# Caching the model loading to prevent reloading on every interaction.
-@st.cache_resource
-def load_roboflow_model(api_key, model_id):
-    """Loads and returns the Roboflow model object."""
-    rf = Roboflow(api_key=api_key)
-    project_id, version_number = model_id.split('/')
-    project = rf.workspace().project(project_id)
-    return project.version(int(version_number)).model
-
-# --- Helper Functions ---
-def plot_waste_distribution(predictions):
-    """Generates a bar chart from the prediction counts."""
-    class_counts = Counter(p['class'] for p in predictions)
-    
-    if not class_counts:
-        return None
-
-    df = pd.DataFrame.from_dict(class_counts, orient='index', columns=['Count']).reset_index()
-    df = df.rename(columns={'index': 'Waste Type'})
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars = ax.bar(df['Waste Type'], df['Count'], color='dodgerblue')
-    ax.set_ylabel('Count')
-    ax.set_title('Waste Segregation Analysis', fontsize=16)
-    plt.xticks(rotation=45, ha='right')
-    
-    # Add counts on top of bars
-    for bar in bars:
-        yval = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2.0, yval, int(yval), va='bottom', ha='center') 
+# --- Model Training Function ---
+def train_model():
+    """
+    Downloads data from Roboflow, trains the YOLOv8 model,
+    and moves the best weights to the root directory.
+    """
+    # Initialize Roboflow
+    api_key = os.environ.get(ROBOFLOW_API_KEY_ENV)
+    if not api_key:
+        return False, "Roboflow API key is not set in environment variables."
         
-    return fig
+    try:
+        rf = Roboflow(api_key=api_key)
+        # Using a reliable public project for this example
+        project = rf.workspace("augmented-library").project("waste-classification-aolds")
+        dataset = project.version(1).download("yolov8")
+        data_yaml_path = os.path.join(dataset.location, "data.yaml")
+    except Exception as e:
+        return False, f"Error connecting to Roboflow or downloading dataset: {e}"
 
-# --- Main Application ---
-st.title("♻️ Computer Vision Waste Segregation System for Smart Cities")
-st.write("Leveraging YOLOv8 to automate waste detection and classification from images. Choose between analyzing a single image or processing a batch of images from a `.zip` file.")
-
-# --- Sidebar for Configuration ---
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    api_key = st.text_input("Enter your Roboflow API Key:", type="password")
-    
-    st.subheader("🤖 Model Details")
-    model_id = st.text_input("Roboflow Model ID:", "waste-detection-p52ar/1")
-    confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.4, 0.05)
-
-# --- Tabbed Interface ---
-tab1, tab2 = st.tabs(["🖼️ Single Image Analysis", "🗂️ Batch Dataset Analysis"])
-
-# --- SINGLE IMAGE TAB ---
-with tab1:
-    st.header("Upload an Image for Analysis")
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-
-    if uploaded_file is not None:
-        col1, col2 = st.columns(2)
+    # Train the YOLOv8 model
+    try:
+        model = YOLO('yolov8n.pt')  # Load a pretrained model
+        results = model.train(data=data_yaml_path, epochs=75, imgsz=640, project="YOLOv8-Waste-Training")
         
-        image = Image.open(uploaded_file)
-        with col1:
-            st.image(image, caption="Uploaded Image", use_column_width=True)
+        # Find the path to the best model weights
+        # The path is usually runs/detect/train/weights/best.pt
+        source_path = os.path.join(results.save_dir, 'weights', 'best.pt')
+        
+        if os.path.exists(source_path):
+            shutil.move(source_path, MODEL_PATH)
+            # Optional: Clean up the training directory
+            shutil.rmtree("YOLOv8-Waste-Training")
+            return True, f"Model trained and saved as `{MODEL_PATH}`"
+        else:
+            return False, "Could not find the trained model file 'best.pt' after training."
 
-      
+    except Exception as e:
+        return False, f"An error occurred during model training: {e}"
+
+
+# --- Streamlit Main Application ---
+def run_main_app():
+    """
+    The main Streamlit application for uploading images and getting predictions.
+    """
+    st.success(f"**Trained Model (`{MODEL_PATH}`) Loaded Successfully!**")
+    st.write("Upload an image to detect and classify different types of waste.")
+
+    @st.cache_resource
+    def load_model(model_path):
+        """Cached function to load the YOLO model."""
+        try:
+            return YOLO(model_path)
+        except Exception as e:
+            st.error(f"Error loading model: {e}")
+            return None
+
+    model = load_model(MODEL_PATH)
+    
+    if model:
+        uploaded_file = st.file_uploader(
+            "Choose an image...", type=["jpg", "jpeg", "png"]
+        )
+        if uploaded_file is not None:
+            image = Image.open(io.BytesIO(uploaded_file.getvalue()))
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(image, caption='Uploaded Image', use_column_width=True)
+            
+            with st.spinner("Processing image..."):
+                results = model(image)
+                result_image_bgr = results[0].plot()  # plot() returns a BGR numpy array
+                result_image_rgb = result_image_bgr[..., ::-1]  # Convert BGR to RGB for PIL/Streamlit
+            
+            with col2:
+                st.image(result_image_rgb, caption='Processed Image', use_column_width=True)
+
+            detected_objects = {}
+            for r in results:
+                for c in r.boxes.cls:
+                    class_name = model.names[int(c)]
+                    detected_objects[class_name] = detected_objects.get(class_name, 0) + 1
+            
+            if detected_objects:
+                st.write("### Detected Waste Types:")
+                items = [f"- **{count}** `{obj.capitalize()}`" for obj, count in detected_objects.items()]
+                st.markdown("\n".join(items))
+            else:
+                st.info("No waste objects were detected.")
+
+# --- Main Controller ---
+if __name__ == "__main__":
+    st.set_page_config(page_title="Smart Waste Segregation", layout="wide")
+    st.title("♻️ AI-Powered Waste Segregation System")
+
+    # If model doesn't exist, show the training interface
+    if not os.path.exists(MODEL_PATH):
+        st.warning(f"**Trained model (`{MODEL_PATH}`) not found.**")
+        st.info("The model needs to be trained once. This process requires a Roboflow API key and may take some time.")
+        
+        st.markdown("""
+        To proceed, please set the `ROBOFLOW_API_KEY` environment variable.
+        If you don't have one, you can get it for free from [Roboflow](https://app.roboflow.com/).
+        """)
+
+        api_key = os.environ.get(ROBOFLOW_API_KEY_ENV)
+        if not api_key:
+            st.error("Your Roboflow API Key is not set. Please follow the instructions in Step 2 and restart the app.")
+        else:
+            st.success("Roboflow API key found in environment variables.")
+
+        if st.button("🚀 Start Model Training", disabled=(not api_key)):
+            with st.spinner("Training model... Check terminal for progress. This will take several minutes."):
+                success, message = train_model()
+            
+            if success:
+                st.success(message)
+                st.success("Training complete! The app will now reload to use the new model.")
+                st.balloons()
+                st.experimental_rerun()  # Rerun the script to load the main app
+            else:
+                st.error(f"Training Failed: {message}")
+    
+    # If model exists, run the main application
+    else:
+        run_main_app()
