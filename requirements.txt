@@ -5,5 +5,3 @@ Pillow
 roboflow
 ultralytics
 requests
-zipfile
-shutil
