@@ -1,5 +1,0 @@
-streamlit
-ultralytics
-roboflow
-Pillow
-opencv-python-headless
